@@ -220,7 +220,7 @@ v = [A, B]
 `C` delegate is left, return it -> its index is `this.InvocationCount - 1`
 
 When `this` invocation count and `value` invocation count differ by more than 1, which means still blocks will exist after removal,
-we will remove the `value` delegates by following [already known](https://github.com/blendereru/interview-prep/blob/main/src/CSharp/delegates/delegates.md#:~:text=In%20RemoveImpl%20method%2C%20we%20check%20if%20the%20value%20contains%20chained%20delegates%3A) algorithm.
+we will remove the `value` delegates by following [already known](https://github.com/blendereru/interview-prep/blob/main/src/CSharp/delegates/delegates.md#:~:text=Otherwise%2C%20retrieve%20this%20invocation%20list%20length%20and%20shrink%20it%20by%20dividing%20it%20by%202%20every%20time%20until%20its%20length%20is%20enough%20to%20hold%20all%20invocation%20delegates%20without%20delegate%20to%20be%20removed.%20Then%2C%20fill%20the%20resulting%20array%20with%20the%20remaining%20delegates.) algorithm.
 
 ### Equals
 Equals method has base class implementation as well, which is [self-documented](https://source.dot.net/#System.Private.CoreLib/src/System/Delegate.CoreCLR.cs,0dd8585ba1833ad7).

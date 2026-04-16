@@ -145,7 +145,7 @@ If we couldn't add the `dFollow` delegate to the `invocationList` array, we set 
 
 * `followList`(chained delegates of the follow) is not null - meaning it contains chained delegates. In this case, we try to insert
 each delegate from `dFollow` to the `resultList`(remember it is set to invocationList) array starting from the position of invocationCount,
-and if at least one delegate couldn't be added, we break the loop and set `resultList` to null:
+and if at least one delegate couldn't be added, we break the loop and set `resultList` to `null`:
 ```csharp
 else
 {
@@ -180,11 +180,49 @@ public static Delegate? Remove(Delegate? source, Delegate? value)
 ```
 In `RemoveImpl` method, we check if the `value` contains chained delegates:
 * If no, we check if `this` contains any chained delegates. 
-    * If no, we check if `this` and `value` delegates are equal. If yes, just return null. It works as follows:
+    * If no, we check if `this` and `value` delegates are equal. If yes, just return `null`. It works as follows:
     ```csharp
      Action a = A;
      Action b = A;
      
      a -= b; // a is null now
     ```
-    * If yes, for all  chained delegates of `this` delegate, compare them with `value` delegate. 
+    * If yes, for all chained delegates of `this` delegate, compare them with `value` delegate. Starting from the last index,
+    find the first match, and if the invocation list count is 2(meaning it contains only two delegates), return either the first or last delegate.
+    Otherwise, retrieve `this` invocation list length and shrink it by dividing it by 2 every time until its length is enough to hold all invocation delegates without delegate to be removed.
+    Then, fill the resulting array with the remaining delegates.
+
+* If yes, it results in both `this` and `value` having chained delegates. Here, `sliding window` is applied to remove last occurence of 
+`value` delegate from `this` invocation list. We deduce `value` invocation count from from `this` invocation count. This value gives
+us the last index of subarray of `this` invocation list with length equal to `value` invocation count. And we compare this subarray
+with `value` delegates. If they are equal(element by element), we compare the `invocationCount` to `value.InvocationCount` and
+if they are equal, meaning `this` and `value` delegates are equal(by elements size and each element is equal), we return `null`.
+If `invocationCount` prevails `value.InvocationCount` by 1, we consider 2 cases:
+1) When remaining element at the beginning
+```
+// Invocation list display
+a = [A, B, C]
+value = [B, C]
+```
+which leaves `A` delegate only. The following code covers this case:
+```csharp
+else if (invocationCount - vInvocationCount == 1)
+{
+    // Special case - only one value left, either at the beginning or the end
+    return (Delegate)invocationList[i != 0 ? 0]; // 0 retured -> it is prefix
+}
+```
+2) When remaining element at the end
+```csharp
+a = [A, B, C]
+v = [A, B]
+```
+`C` delegate is left, return it -> its index is `this.InvocationCount - 1`
+
+When `this` invocation count and `value` invocation count differ by more than 1, which means still blocks will exist after removal,
+we will remove the `value` delegates by following [already known](https://github.com/blendereru/interview-prep/blob/main/src/CSharp/delegates/delegates.md#:~:text=In%20RemoveImpl%20method%2C%20we%20check%20if%20the%20value%20contains%20chained%20delegates%3A) algorithm.
+
+### Equals
+Equals method has base class implementation as well, which is [self-documented](https://source.dot.net/#System.Private.CoreLib/src/System/Delegate.CoreCLR.cs,0dd8585ba1833ad7).
+MulticastDelegate overrides it, just applying check for `_invocationList` using [InvocationListEquals](https://github.com/dotnet/runtime/blob/e751e3819a4f5764740814ed39089336b5dfc040/src/coreclr/System.Private.CoreLib/src/System/MulticastDelegate.CoreCLR.cs#L124-L144) method.
+In the method, we compare every element of `_invocationList` and `d` using `Equals` method.

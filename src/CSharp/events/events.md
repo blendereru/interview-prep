@@ -81,10 +81,86 @@ change after combination, and if it didn't, it replaces the event's delegate wit
 that the event's delegate changed(because another thread subscribed to the event before us), so we need to retry the combination.
 This is an algorithm that ensures that during concurrent delegates combination, no delegate is lost in midway. Consider an example:
 During `Combine` operation, two threads try to write their values:
-* Thread A: Combine(A, B)
-* Thread B: Combine(A, C)
+* `Thread A`: Combine(A, B)
+* `Thread B`: Combine(A, C)
 Thread A atomically checks if the event delegate(A just holds reference to it) didn't change after combining A and B, `CompareExchange` returns A.
 While loop returns true, so `Combine` succeded. Thread B at the same time checks if the event delegate didn't change after combining A and C,
 since it changed after thread A combined A and B, `CompareExchange` returns A + B. At second iteration(since while loop returns false),
 the block `do` recomputes the reference to the event delegate, and `Combine` is called again, now with the A + B + C. So that's how
 the logic ensures to handle concurrent delegates combination. The logic is the same for `Remove` operation.
+
+## Usage
+Usually, events are used in WinForms applications to react to component state changes. For example, typical button clicking 
+event is handled as follows:
+```csharp
+public Form1()
+{
+    InitializeComponent();
+    
+    // Wire up the event handler
+    btnSubmit.Click += this.btnSubmit_Click;
+}
+
+private void btnSubmit_Click(object sender, EventArgs e)
+{
+    // Your logic here
+    Console.WriteLine("Button was clicked manually.");
+}
+```
+All components' events in WinForms are of `EventHandler` delegate type, which has the the following signature:
+```csharp
+public delegate void EventHandler(object? sender, EventArgs e);
+```
+And event itself is invoked in the following way:
+```csharp
+ /// <summary>
+ ///  Raises the <see cref="Click"/>
+ ///  event.
+ /// </summary>
+ [EditorBrowsable(EditorBrowsableState.Advanced)]
+ protected virtual void OnClick(EventArgs e)
+ {
+     ((EventHandler?)Events[s_clickEvent])?.Invoke(this, e);
+ }
+```
+Where `EventArgs` is the base class for classes that contain event data, and it represents an event payload. For instance, 
+`MouseEventArgs` contains the following payload for `MouseUp` and `MouseDown` events:
+```csharp
+public class MouseEventArgs : EventArgs
+{
+    internal MouseEventArgs(MouseButtons button, int clicks, Point location, int delta = 0)
+    {
+        Button = button;
+        Clicks = clicks;
+        X = location.X;
+        Y = location.Y;
+        Delta = delta;
+    }
+    public MouseButtons Button { get; }
+
+    /// <summary>
+    ///  Gets the number of times the mouse button was pressed and released.
+    /// </summary>
+    public int Clicks { get; }
+
+    /// <summary>
+    ///  Gets the x-coordinate of a mouse click.
+    /// </summary>
+    public int X { get; }
+
+    /// <summary>
+    ///  Gets the y-coordinate of a mouse click.
+    /// </summary>
+    public int Y { get; }
+
+    /// <summary>
+    ///  Gets a signed count of the number of detents the mouse wheel has rotated.
+    /// </summary>
+    public int Delta { get; }
+
+    /// <summary>
+    ///  Gets the location of the mouse during MouseEvent.
+    /// </summary>
+    public Point Location => new(X, Y);
+}
+```

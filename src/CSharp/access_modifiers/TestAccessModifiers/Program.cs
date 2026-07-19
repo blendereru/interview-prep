@@ -1,8 +1,8 @@
 ﻿using System.Runtime.CompilerServices;
 
+[assembly: InternalsVisibleTo("AccessModifiers")]
 namespace TestAccessModifiers
 {
-    [assembly: InternalsVisibleTo("AccessModifiers")]
     public class Program
     {
         public static void Main(string[] args)

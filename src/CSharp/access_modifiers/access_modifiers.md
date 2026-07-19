@@ -202,7 +202,31 @@ other assemblies. For example, let's make `AccessModifiers` assembly visible to 
 ```csharp
 [assembly: InternalsVisibleTo("AccessModifiers")]
 ```
-And access `Sixth` class `private protected` member.
+And access `Sixth` class `private protected` member:
+```csharp
+public class Twelve : Sixth
+{
+    public void Test()
+    {
+        PrivateProtectedMember();
+    }
+}
+```
+By definition of `InternalsVisibleTo` attribute, it specifies that types that are ordinarily visible only within the current assembly are visible to a specified assembly.
+For that reason, compiler treats `AccessModifiers` assembly as a friend assembly, that is why the following code throws a compile-time error:
+```csharp
+public class Fifth : Fourth
+{
+    // error, should be changed to protected internal as AccessModifiers assembly is a friend assembly
+    protected override int ProtectedInternalMember() 
+    {
+        return 1;
+    }
+    // safe, other assembly can derive and access this member.
+}
+```
+Now, `Fifth` class can declare `ProtectedInteralMember` as `protected internal` as AccessModifiers assembly is a friend assembly.
 
+## Reference
 The comparison table between all `protected` modifiers difference is shown in the following [doc](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/private-protected#comparison-with-other-protected-access-modifiers)
 

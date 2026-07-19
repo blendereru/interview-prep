@@ -1,4 +1,5 @@
-﻿using TestAccessModifiers;
+﻿using System.Runtime.CompilerServices;
+using TestAccessModifiers;
 
 namespace AccessModifiers
 {
@@ -23,7 +24,7 @@ namespace AccessModifiers
 
     public class Fifth : Fourth
     {
-        protected override int ProtectedInternalMember()
+        protected internal override int ProtectedInternalMember()
         {
             return 1;
         }

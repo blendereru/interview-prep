@@ -14,6 +14,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AccessModifiers", "src\CSha
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestAccessModifiers", "src\CSharp\access_modifiers\TestAccessModifiers\TestAccessModifiers.csproj", "{7B41E470-ED6E-447D-9CD5-677704447AFD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dictionary_Internals", "src\CSharp\Dictionary_Internals\Dictionary_Internals.csproj", "{0BCD6566-5258-4DD6-BD36-358026DA8BFC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,5 +50,9 @@ Global
 		{7B41E470-ED6E-447D-9CD5-677704447AFD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7B41E470-ED6E-447D-9CD5-677704447AFD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7B41E470-ED6E-447D-9CD5-677704447AFD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0BCD6566-5258-4DD6-BD36-358026DA8BFC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0BCD6566-5258-4DD6-BD36-358026DA8BFC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0BCD6566-5258-4DD6-BD36-358026DA8BFC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0BCD6566-5258-4DD6-BD36-358026DA8BFC}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

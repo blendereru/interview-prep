@@ -147,7 +147,7 @@ public const int HashPrime = 101;
 public static int GetPrime(int min)
 {
     if (min < 0)
-                throw new ArgumentException(SR.Arg_HTCapacityOverflow);
+        throw new ArgumentException(SR.Arg_HTCapacityOverflow);
 
     foreach (int prime in Primes)
     {
@@ -233,7 +233,7 @@ Notice that we explicitly set `_comparer` as null if `EqualityComparer<TKey>.Def
 The answer is that `_comparer == null` becomes a meaningful signal used throughout the rest of
 Dictionary's internals: "this dictionary is using default comparison behavior."
 
-There is another overload of Dictionary ctor that has the following implementation:
+There is another overload of `Dictionary` ctor that has the following implementation:
 ```csharp
 public Dictionary(IDictionary<TKey, TValue> dictionary, IEqualityComparer<TKey>? comparer) :
     this(dictionary?.Count ?? 0, comparer)
@@ -266,7 +266,7 @@ if (enumerable.GetType() == typeof(Dictionary<TKey, TValue>))
     return;
 }
 ```
-As mentioned earlier, `next >= -1` indicates live entry( index of the next entry in the same bucket's collision
+As mentioned earlier, `next >= -1` indicates live entry (index of the next entry in the same bucket's collision
 chain (a value >= 0), or -1 if it's the last (or only) entry in its chain). For each such entry, `Add` method is called:
 ```csharp
 public void Add(TKey key, TValue value)
@@ -323,7 +323,7 @@ private bool TryInsert(TKey key, TValue value, InsertionBehavior behavior)
                     ThrowHelper.ThrowAddingDuplicateWithKeyArgumentException(key);
                 }
 
-                return false;
+                return false; // dict.TryAdd(key, value) → report "nope, already there," no throw, no overwrite
             }
 
             i = entries[i].next;
@@ -340,4 +340,386 @@ private bool TryInsert(TKey key, TValue value, InsertionBehavior behavior)
 }
 ```
 From this code, it is visible that a freshly-constructed empty Dictionary doesn't allocate `_buckets/_entries`
-until the first insertion.
+until the first insertion. The following block is interesting:
+```csharp
+uint hashCode = (uint)((typeof(TKey).IsValueType && comparer == null) ? key.GetHashCode() : comparer!.GetHashCode(key));
+```
+Because we know `TKey` is not a reference type we could directly call `GetHashCode` on the value type itself, as calling
+the method on `comparer` instance boxes the argument. The retrieved `hashCode` is then passed to `GetBucket`, which has 
+the following implementation:
+```csharp
+[MethodImpl(MethodImplOptions.AggressiveInlining)]
+private ref int GetBucket(uint hashCode)
+{
+    int[] buckets = _buckets!;
+#if TARGET_64BIT
+    return ref buckets[HashHelpers.FastMod(hashCode, (uint)buckets.Length, _fastModMultiplier)];
+#else
+    return ref buckets[(uint)hashCode % buckets.Length];
+#endif
+}
+```
+This basically maps the `hashCode` to the correct slot in `_buckets`. Let's enter the first branch with the following loop:
+```csharp
+while ((uint)i < (uint)entries.Length)
+```
+Casting to `uint` is a trick, so that when `i = -1`, the cast produced value `4,294,967,295` which is larger than `entries.Length`,
+so the single cast covers both "index is within bounds" and "index isn't the -1 sentinel" in one comparison.
+```csharp
+if (entries[i].hashCode == hashCode && EqualityComparer<TKey>.Default.Equals(entries[i].key, key))
+```
+This check ensures `entries[i]` is a genuine existing entry with the exact same key we are trying to insert(meaning this key
+is already in the dictionary). Depending on the `InsertionBehaviour`, we override the value or not.
+
+If no match happened, move on to the next entry in this bucket's collision chain:
+```csharp
+i = entries[i].next;
+```
+The `else` block is basically the same, except for `EqualityComparer<TKey>.Default` intrinsic, so we will not consider it here.
+Let's consider the actual insertion logic:
+```csharp
+int index;
+if (_freeCount > 0)
+{
+    index = _freeList;
+    Debug.Assert((StartOfFreeList - entries[_freeList].next) >= -1, "shouldn't overflow because `next` cannot underflow");
+    _freeList = StartOfFreeList - entries[_freeList].next;
+    _freeCount--;
+}
+else
+{
+    int count = _count;
+    if (count == entries.Length)
+    {
+        Resize();
+        bucket = ref GetBucket(hashCode);
+    }
+    index = count;
+    _count = count + 1;
+    entries = _entries;
+}
+
+ref Entry entry = ref entries![index];
+entry.hashCode = hashCode;
+entry.next = bucket - 1; // Value in _buckets is 1-based
+entry.key = key;
+entry.value = value;
+bucket = index + 1; // Value in _buckets is 1-based
+_version++;
+
+// Value types never rehash
+if (!typeof(TKey).IsValueType && collisionCount > HashHelpers.HashCollisionThreshold && comparer is NonRandomizedStringEqualityComparer)
+{
+    // If we hit the collision threshold we'll need to switch to the comparer which is using randomized string hashing
+    // i.e. EqualityComparer<string>.Default.
+    Resize(entries.Length, true);
+}
+
+return true;
+```
+When `_freeCount > 0`, `index = _freeList` grabs the head of the free list as the slot for the new entry. Then the free 
+list needs to advance to point at the next free slot. When there is no free slot(`else` block) - indicating the array is 
+completely full - it's time to grow the array, via the `Resize()`:
+```csharp
+private void Resize() => Resize(HashHelpers.ExpandPrime(_count), false);
+
+private void Resize(int newSize, bool forceNewHashCodes)
+{
+    // Value types never rehash
+    Debug.Assert(!forceNewHashCodes || !typeof(TKey).IsValueType);
+    Debug.Assert(_entries != null, "_entries should be non-null");
+    Debug.Assert(newSize >= _entries.Length);
+
+    Entry[] entries = new Entry[newSize];
+
+    int count = _count;
+    Array.Copy(_entries, entries, count);
+
+    if (!typeof(TKey).IsValueType && forceNewHashCodes)
+    {
+        Debug.Assert(_comparer is NonRandomizedStringEqualityComparer);
+        IEqualityComparer<TKey> comparer = _comparer = (IEqualityComparer<TKey>)((NonRandomizedStringEqualityComparer)_comparer).GetRandomizedEqualityComparer();
+
+        for (int i = 0; i < count; i++)
+        {
+            if (entries[i].next >= -1)
+            {
+                entries[i].hashCode = (uint)comparer.GetHashCode(entries[i].key);
+            }
+        }
+    }
+
+    // Assign member variables after both arrays allocated to guard against corruption from OOM if second fails
+    _buckets = new int[newSize];
+#if TARGET_64BIT
+    _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)newSize);
+#endif
+    for (int i = 0; i < count; i++)
+    {
+        if (entries[i].next >= -1)
+        {
+            ref int bucket = ref GetBucket(entries[i].hashCode);
+            entries[i].next = bucket - 1; // Value in _buckets is 1-based
+            bucket = i + 1;
+        }
+    }
+
+    _entries = entries;
+}
+```
+Parameterless `Resize()` method calls the overload method with `ExpandPrime(_count)` and `forceNewHashCodes` set to `false`.
+Let's consider what's inside `ExpandPrime`:
+```csharp
+// This is the maximum prime smaller than Array.MaxLength.
+public const int MaxPrimeArrayLength = 0x7FFFFFC3;
+
+// Returns size of hashtable to grow to.
+public static int ExpandPrime(int oldSize)
+{
+    int newSize = 2 * oldSize;
+
+    // Allow the hashtables to grow to maximum possible size (~2G elements) before encountering capacity overflow.
+    // Note that this check works even when _items.Length overflowed thanks to the (uint) cast
+    if ((uint)newSize > MaxPrimeArrayLength && MaxPrimeArrayLength > oldSize)
+    {
+        Debug.Assert(MaxPrimeArrayLength == GetPrime(MaxPrimeArrayLength), "Invalid MaxPrimeArrayLength");
+        return MaxPrimeArrayLength;
+    }
+
+    return GetPrime(newSize);
+}
+```
+The logic is trivial: double the size of the entries size, and round this `newSize` to the next prime number at or above that value.
+
+This was just one of the few branches of `AddRange` method. Let's consider another branch:
+```csharp
+// We similarly special-case KVP<>[] and List<KVP<>>, as they're commonly used to seed dictionaries, and
+// we want to avoid the enumerator costs (e.g. allocation) for them as well. Extract a span if possible.
+ReadOnlySpan<KeyValuePair<TKey, TValue>> span;
+if (enumerable is KeyValuePair<TKey, TValue>[] array)
+{
+    span = array;
+}
+else if (enumerable.GetType() == typeof(List<KeyValuePair<TKey, TValue>>))
+{
+    span = CollectionsMarshal.AsSpan((List<KeyValuePair<TKey, TValue>>)enumerable);
+}
+else
+{
+    // Fallback path for all other enumerables
+    foreach (KeyValuePair<TKey, TValue> pair in enumerable)
+    {
+        Add(pair.Key, pair.Value);
+    }
+    return;
+}
+
+// We got a span. Add the elements to the dictionary.
+foreach (KeyValuePair<TKey, TValue> pair in span)
+{
+    Add(pair.Key, pair.Value);
+}
+```
+
+Then, we have `Comparer` property with accessors:
+```csharp
+public IEqualityComparer<TKey> Comparer
+{
+    get
+    {
+        if (typeof(TKey) == typeof(string))
+        {
+            Debug.Assert(_comparer is not null, "The comparer should never be null for a reference type.");
+            return (IEqualityComparer<TKey>)IInternalStringEqualityComparer.GetUnderlyingEqualityComparer((IEqualityComparer<string?>)_comparer);
+        }
+        else
+        {
+            return _comparer ?? EqualityComparer<TKey>.Default;
+        }
+    }
+}
+```
+Checking the `TKey` if of type `string` is reasonable because of the `ctor` logic we covered before: if `_comparer` is one of
+the `NonRandomizedStringEqualityComparer` wrapper singletons (`WrappedAroundDefaultComparer`,
+`WrappedAroundStringComparerOrdinal`, `WrappedAroundStringComparerOrdinalIgnoreCase`), this call retrieves the original
+comparer object that wrapper was standing in for (`EqualityComparer<string>.Default`, `StringComparer.Ordinal`, 
+or `StringComparer.OrdinalIgnoreCase` respectively) — the one the user actually passed in (or that was implied by default),
+preserving the round-trip guarantee (`dict.Comparer` == `StringComparer.Ordinal` being `true`).
+```csharp
+internal interface IInternalStringEqualityComparer : IEqualityComparer<string?>
+{
+    IEqualityComparer<string?> GetUnderlyingEqualityComparer();
+
+    /// <summary>
+    /// Unwraps the internal equality comparer, if proxied.
+    /// Otherwise returns the equality comparer itself or its default equivalent.
+    /// </summary>
+    internal static IEqualityComparer<string?> GetUnderlyingEqualityComparer(IEqualityComparer<string?> outerComparer)
+    {
+        if (outerComparer is IInternalStringEqualityComparer internalComparer)
+        {
+            return internalComparer.GetUnderlyingEqualityComparer();
+        }
+        else
+        {
+            return outerComparer;
+        }
+    }
+}
+```
+Since `NonRandomizedStringEqualityComparer` implements `IInternalStringEqualityComparer`, the method is implemented as follows:
+```csharp
+// Gets the comparer that should be returned back to the caller when querying the
+// ICollection.Comparer property. Also used for serialization purposes. 
+public virtual IEqualityComparer<string?> GetUnderlyingEqualityComparer() => _underlyingComparer;
+```
+Accessing value by key using indexer does this:
+```csharp
+public TValue this[TKey key]
+{
+    get
+    {
+        ref TValue value = ref FindValue(key);
+        if (!Unsafe.IsNullRef(ref value))
+        {
+            return value;
+        }
+
+        ThrowHelper.ThrowKeyNotFoundException(key);
+        return default;
+    }
+    set
+    {
+        bool modified = TryInsert(key, value, InsertionBehavior.OverwriteExisting);
+        Debug.Assert(modified);
+    }
+}
+```
+`Setter` block is trivial, let's `getter`, in particular `FindValue` method:
+```csharp
+internal ref TValue FindValue(TKey key)
+{
+    if (key == null)
+    {
+        ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
+    }
+
+    ref Entry entry = ref Unsafe.NullRef<Entry>();
+    if (_buckets != null)
+    {
+        Debug.Assert(_entries != null, "expected entries to be != null");
+        IEqualityComparer<TKey>? comparer = _comparer;
+        if (typeof(TKey).IsValueType && // comparer can only be null for value types; enable JIT to eliminate entire if block for ref types
+                    comparer == null)
+        {
+            // TODO: Replace with just key.GetHashCode once https://github.com/dotnet/runtime/issues/117521 is resolved.
+            uint hashCode = (uint)EqualityComparer<TKey>.Default.GetHashCode(key);
+            int i = GetBucket(hashCode);
+            Entry[]? entries = _entries;
+            uint collisionCount = 0;
+
+            // ValueType: Devirtualize with EqualityComparer<TKey>.Default intrinsic
+            i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
+            do
+            {
+                // Test in if to drop range check for following array access
+                if ((uint)i >= (uint)entries.Length)
+                {
+                    goto ReturnNotFound;
+                }
+
+                entry = ref entries[i];
+                if (entry.hashCode == hashCode && EqualityComparer<TKey>.Default.Equals(entry.key, key))
+                {
+                    goto ReturnFound;
+                }
+
+                i = entry.next;
+
+                collisionCount++;
+            } while (collisionCount <= (uint)entries.Length);
+
+            // The chain of entries forms a loop; which means a concurrent update has happened.
+            // Break out of the loop and throw, rather than looping forever.
+            goto ConcurrentOperation;
+        }
+        else
+        {
+            Debug.Assert(comparer is not null);
+            uint hashCode = (uint)comparer.GetHashCode(key);
+            int i = GetBucket(hashCode);
+            Entry[]? entries = _entries;
+            uint collisionCount = 0;
+            i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
+            do
+            {
+                // Test in if to drop range check for following array access
+                if ((uint)i >= (uint)entries.Length)
+                {
+                    goto ReturnNotFound;
+                }
+
+                entry = ref entries[i];
+                if (entry.hashCode == hashCode && comparer.Equals(entry.key, key))
+                {
+                    goto ReturnFound;
+                }
+
+                i = entry.next;
+
+                collisionCount++;
+            } while (collisionCount <= (uint)entries.Length);
+
+            // The chain of entries forms a loop; which means a concurrent update has happened.
+            // Break out of the loop and throw, rather than looping forever.
+            goto ConcurrentOperation;
+        }
+    }
+
+    goto ReturnNotFound;
+
+        ConcurrentOperation:
+            ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported();
+        ReturnFound:
+            ref TValue value = ref entry.value;
+        Return:
+            return ref value;
+        ReturnNotFound:
+            value = ref Unsafe.NullRef<TValue>();
+            goto Return;
+}
+```
+This code looks similar to what we have seen in `TryInsert` method. The first thing we are interested at:
+```csharp
+ref Entry entry = ref Unsafe.NullRef<Entry>();
+```
+This indicates to let low-level code represent "no value found" using a `ref` variable, without needing a separate `bool
+found` flag or an allocation.Similarly, at the end:
+```csharp
+ReturnNotFound:
+    value = ref Unsafe.NullRef<TValue>();
+    goto Return;
+```
+If the key isn't found, the method returns a "null ref" for `TValue` — the caller (elsewhere in `Dictionary`, e.g. in `TryGetValue`) is
+expected to check `Unsafe.IsNullRef(ref returnedValue)` to detect "not found," rather than the method returning some sentinel
+value or throwing.
+```csharp
+int i = GetBucket(hashCode);
+```
+In comparison with `TryInsert` we don't need a `ref` to bucket as we never need to write back to the bucket. Eventually, in `set` block
+we are inserting the value by key but with `InsertionBehavior.OverwriteExisting` behaviour:
+```csharp
+set
+{
+    bool modified = TryInsert(key, value, InsertionBehavior.OverwriteExisting);
+    Debug.Assert(modified);
+}
+```
+`Add` method does the same as setting `kvp(Key-Value pair)` through setter above, but with different `InsertionBehaviour`:
+```csharp
+public void Add(TKey key, TValue value)
+{
+    bool modified = TryInsert(key, value, InsertionBehavior.ThrowOnExisting);
+    Debug.Assert(modified); // If there was an existing key and the Add failed, an exception will already have been thrown.
+}
+```

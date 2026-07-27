@@ -418,7 +418,7 @@ if (!typeof(TKey).IsValueType && collisionCount > HashHelpers.HashCollisionThres
 return true;
 ```
 When `_freeCount > 0`, `index = _freeList` grabs the head of the free list as the slot for the new entry. Then the free 
-list needs to advance to point at the next free slot. When there is no free slot(`else` block) - indicating the array is 
+list needs to advance to point to the next free slot. When there is no free slot(`else` block) - indicating the array is 
 completely full - it's time to grow the array, via the `Resize()`:
 ```csharp
 private void Resize() => Resize(HashHelpers.ExpandPrime(_count), false);
@@ -468,6 +468,9 @@ private void Resize(int newSize, bool forceNewHashCodes)
 }
 ```
 Parameterless `Resize()` method calls the overload method with `ExpandPrime(_count)` and `forceNewHashCodes` set to `false`.
+Now, this is fed into second `Resize(int, bool)` method declaration, where a new, bigger array is allocated, and the existing
+live+free entries (up to the high-water mark count) are bulk-copied across via `Array.Copy` — this preserves each entry's `key`,
+`value`, and cached hash code as raw data for now.
 Let's consider what's inside `ExpandPrime`:
 ```csharp
 // This is the maximum prime smaller than Array.MaxLength.
@@ -490,6 +493,56 @@ public static int ExpandPrime(int oldSize)
 }
 ```
 The logic is trivial: double the size of the entries size, and round this `newSize` to the next prime number at or above that value.
+```csharp
+if (!typeof(TKey).IsValueType && forceNewHashCodes)
+{
+    Debug.Assert(_comparer is NonRandomizedStringEqualityComparer);
+    IEqualityComparer<TKey> comparer = _comparer = (IEqualityComparer<TKey>)((NonRandomizedStringEqualityComparer)_comparer).GetRandomizedEqualityComparer();
+
+    for (int i = 0; i < count; i++)
+    {
+        if (entries[i].next >= -1)
+        {
+            entries[i].hashCode = (uint)comparer.GetHashCode(entries[i].key);
+        }
+    }
+}
+```
+The following logic assumes that `hash-flooding attack` happened, so we are applying `randomized string hashing` instead.
+Inside `GetRandomizedEqualityComparer`, `RandomizedStringEqualityComparer` having its own, separately-defined nested subclasses
+that happen to share the same names, because they serve the exact same conceptual role (ordinal vs. ordinal-ignore-case)
+just implemented with `randomized` hashing logic instead of `non-randomized`:
+```csharp
+internal virtual RandomizedStringEqualityComparer GetRandomizedEqualityComparer()
+{
+    return RandomizedStringEqualityComparer.Create(_underlyingComparer, ignoreCase: false);
+}
+
+internal static RandomizedStringEqualityComparer Create(IEqualityComparer<string?> underlyingComparer, bool ignoreCase)
+{
+    if (!ignoreCase)
+    {
+        return new OrdinalComparer(underlyingComparer);
+    }
+    else
+    {
+        return new OrdinalIgnoreCaseComparer(underlyingComparer);
+    }
+}
+```
+
+Consider the code below:
+```csharp
+for (int i = 0; i < count; i++)
+{
+    if (entries[i].next >= -1)
+    {
+        entries[i].hashCode = (uint)comparer.GetHashCode(entries[i].key);
+    }
+}
+```
+This overwrites the cached hash code stored in the entry, recomputing it using the `newly-randomized` comparer instead
+of whatever the old `non-randomized` comparer had produced.
 
 This was just one of the few branches of `AddRange` method. Let's consider another branch:
 ```csharp

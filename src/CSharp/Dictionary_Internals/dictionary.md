@@ -542,7 +542,31 @@ for (int i = 0; i < count; i++)
 }
 ```
 This overwrites the cached hash code stored in the entry, recomputing it using the `newly-randomized` comparer instead
-of whatever the old `non-randomized` comparer had produced.
+of whatever the old `non-randomized` comparer had produced. Then, the code:
+```csharp
+// Assign member variables after both arrays allocated to guard against corruption from OOM if second fails
+_buckets = new int[newSize];
+#if TARGET_64BIT
+    _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)newSize);
+#endif
+    for (int i = 0; i < count; i++)
+    {
+        if (entries[i].next >= -1)
+        {
+            ref int bucket = ref GetBucket(entries[i].hashCode);
+            entries[i].next = bucket - 1; // Value in _buckets is 1-based
+            bucket = i + 1;
+        }
+    }
+    _entries = entries;
+```
+Expands the `_buckets`(as well as `entries`). Then:
+```csharp
+ref int bucket = ref GetBucket(entries[i].hashCode);
+```
+The block above, returns `bucket` value by reference given the `hashCode`(which is 0 when retrieved, before write, as array
+was expanded, it is brand-new). The loop then re-links every `live` entry into its (possibly new) bucket chain, since
+bucket placement depends on `newSize` and must be rebuilt from scratch regardless of whether hash codes themselves changed.
 
 This was just one of the few branches of `AddRange` method. Let's consider another branch:
 ```csharp
